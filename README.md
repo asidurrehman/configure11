@@ -4,7 +4,7 @@ This repository contains Python code for the Cost-benefit OptimisatioN Framework
 ## Note
   Asid Ur Rehman developed this optimisation framework as part of his PhD study at Newcastle University. If you use this code, please acknowledge its source with the following citation:
 
-  *Rehman, A. U., Glenis, V., Lewis, E., Kilsby, C., & Walsh, C. (2025). Robust Blue‐Green Urban Flood Risk Management Optimised With a Genetic Algorithm for Multiple Rainstorm Return Periods. Journal of Flood Risk Management, 18(3), e70118.*
+  *Ur Rehman, A., Glenis, V., Lewis, E., Kilsby, C., & Walsh, C. (2025). Robust Blue‐Green Urban Flood Risk Management Optimised With a Genetic Algorithm for Multiple Rainstorm Return Periods. Journal of Flood Risk Management, 18(3), e70118.*
 
   ## Licence  
 Asid Ur Rehman (C) 2025. Licenced under the terms of the GNU General Public License v3.0
