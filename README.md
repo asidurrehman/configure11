@@ -14,6 +14,7 @@ This repository contains the Python code for CONFIGURE version 1.1. The associat
 - [Overview](#overview)
 - [How it works](#how-it-works)
 - [Repository structure](#repository-structure)
+- [Understanding the code](#understanding-the-code)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Input data and folder layout](#input-data-and-folder-layout)
@@ -68,6 +69,15 @@ Configure11/
 ├── CHANGELOG.md
 └── LICENSE
 ```
+
+## Understanding the code
+
+Both Python files contain detailed comments written for users who want to understand or adapt the framework. A suggested reading order:
+
+1. **`configure11_main.py`, top of the file.** The *HOW THIS SCRIPT WORKS* block lists the stages of a run (STEP 1 to STEP 9, with 8a–8f inside the generation loop). Each stage has a matching `STEP` header further down. The *NAMING CONVENTIONS* block explains what a chromosome is and the variable prefixes (`i_`, `p_`, `o_`, `comb_`, `f_`, `gen_`, `simulated_`, `opt_`), plus the shape and units of the cost, exposure, damage and EAD arrays.
+2. **`configure11_functions.py`.** The *WHAT IS IN THIS FILE* block groups the helper functions. Each function has a docstring, and the longer ones are commented step by step. `citycat_exposure` shows how `GreenAreas.txt` is built for each candidate, how CityCAT is run for each storm, and how buildings are classed by exposure and given a damage value. The NSGA-II functions explain non-dominated sorting, crowding distance and tournament selection.
+
+Comments starting with `USER INPUT` mark the things you may need to change for your own case study. Most settings live in `config.yaml`, and the comments say when they do. Comments starting with `NOTE (known issue)` mark the problems listed under [Known issues](#known-issues).
 
 ## Requirements
 
@@ -184,6 +194,11 @@ See [Known issues](#known-issues): the last three files are not currently writte
 ## Known issues
 
 - At the end of a run, `configure11_main.py` calls `np.zone_contribution(...)` and `np.scatter_plot_map_plot(...)` instead of `cf.zone_contribution(...)` and `cf.scatter_plot_map_plot(...)`. The script then stops with an `AttributeError`, so `optimised_data.csv`, `BGI_contribution_to_optimised_solutions.csv` and the final optimal plot are not written. `simulated_data.csv` and `generation_data.csv` are complete. Replacing `np.` with `cf.` on those two lines fixes it.
+- If a generation finds fewer than `pop_size` new offspring, the `simulated_data.csv` export stops with a `ValueError`. The generation-number column (`g_counter`) grows by `pop_size` rows per generation, but the simulated chromosomes grow only by the number of offspring actually found.
+- `separate_new_old` raises an `UnboundLocalError` in a generation where no parent survives into the new population.
+- Some code only works on Windows: the `'\GreenAreas.txt'` paths and the `cd ... & citycat.exe` command.
+
+All of these are marked in the code with `NOTE (known issue)` comments.
 
 ## Running the tests
 

@@ -10,6 +10,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   configuration numbers, population size, number of generations), plus a
   `--config` option to use another settings file.
 - Docstrings for every function in `configure11_functions.py`.
+- Detailed explanatory comments throughout the code. These include a
+  step-by-step overview and a naming guide at the top of
+  `configure11_main.py`, `USER INPUT` markers, and `NOTE (known issue)`
+  markers. Comments only; no code changed.
 - Test suite (`pytest`) and a GitHub Actions workflow that runs it on Windows
   and Linux with Python 3.10 and 3.12.
 - `CITATION.cff`, `pyproject.toml`, `requirements.txt`, `.gitignore` and this

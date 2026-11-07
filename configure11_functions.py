@@ -42,6 +42,30 @@ import copy
 
 warnings.filterwarnings("ignore")
 
+#=============================================================================#
+# WHAT IS IN THIS FILE
+#=============================================================================#
+# Helper functions called by configure11_main.py (imported there as "cf"):
+#   Inputs and CityCAT coupling
+#     read_text_file, read_interventions   read the zone/green-area text files
+#     spatial_indices                      one-off CityCAT run that links
+#                                          grid cells to buildings
+#     citycat_exposure                     simulate chromosomes with CityCAT;
+#                                          cost, exposure and direct damage
+#   NSGA-II genetic algorithm
+#     initial_pop, non_dominated_sorting, calculate_crowding_distance,
+#     fitness_sort, fitter_parent, crossover_random_single_point_swap,
+#     mutation_random_bitflip
+#   Housekeeping
+#     remove_duplicate_list, remove_duplicate_same_population,
+#     remove_duplicate_different_population, remove_same_objectives_population,
+#     separate_new_old
+#   Results
+#     zone_contribution, scatter_plot_map_plot
+# A chromosome is a row of 0/1 genes, one per intervention zone
+# (1 = zone built). Objectives are stored as rows of (cost, EAD), both
+# minimised.
+
 ###############################################################################
 """ Functions section starts from here """
 ###############################################################################
@@ -102,10 +126,15 @@ def spatial_indices(f_bldg_file, f_run_path, f_idx_rainfall, f_idx_config,
     buffer_list : list
         Building ID for each entry of ``cell_index``.
     """
+    # Run CityCAT once with the indexing rainfall/configuration numbers. This is
+    # a Windows command (change to the run folder, then run citycat.exe); Python
+    # waits until CityCAT has finished. Only the grid cell coordinates of its
+    # maximum-depth output are used here.
     subprocess.call('cd {run_path} & citycat.exe -r {r} -c {c}'.format
                     (run_path = f_run_path, r = f_idx_rainfall, 
                      c = f_idx_config), shell=True)
  
+    # (column names of the buildings shapefile; collected but not used further)
     cols_list = []
     df1 = gpd.read_file(f_bldg_file)  
     for n in df1.columns:
@@ -116,6 +145,9 @@ def spatial_indices(f_bldg_file, f_run_path, f_idx_rainfall, f_idx_config,
     buffer_value = 150 # 150% of grid/DEM spatial resolution
     
     #first get the resolution of the grid:
+    # dx = distance between the x coordinates (or, if they are equal, the y
+    # coordinates) of two consecutive cells in the depth CSV. The search buffer
+    # around each building is buffer_value % of dx, i.e. 1.5 x dx.
     df_res = pd.read_csv(f_csv_file, nrows=3)
     xdiff = df_res.iloc[2,0] - df_res.iloc[1,0]
     ydiff = df_res.iloc[2,1] - df_res.iloc[1,1]
@@ -127,6 +159,8 @@ def spatial_indices(f_bldg_file, f_run_path, f_idx_rainfall, f_idx_config,
     buffer_distance = ((buffer_value)/100)*dx 
     # ^ in % of grid resolution #was 150 -> 100
     
+    # Read the x and y coordinates of every grid cell from the depth CSV. The
+    # split pattern accepts spaces, tabs or commas between the columns.
     x=[]
     y=[]
     with open(f_csv_file, 'r') as t:
@@ -142,6 +176,8 @@ def spatial_indices(f_bldg_file, f_run_path, f_idx_rainfall, f_idx_config,
             aline = t.readline() # read next line   
     t.close()
     
+    # Build an R-tree spatial index of the cell centres. Each cell's id is its
+    # data-row number in the CSV, so its depth can later be picked by position.
     cell_idx=[]
     for idx, xi in enumerate(x):
         # ^ generating a simple index based on the line number of the X coords 
@@ -160,6 +196,10 @@ def spatial_indices(f_bldg_file, f_run_path, f_idx_rainfall, f_idx_config,
     #the columns 'fid' and 'geometry' need to exist as header name
     del(bldgs)
     
+    # For each building: buffer its footprint, ask the R-tree for cells in the
+    # buffer's bounding box (fast), then keep only the cells whose centre is
+    # inside the buffer itself (exact). Every match is stored as a pair:
+    # buffer_list[k] = building ID, cell_index[k] = cell row number.
     for b_id, b_geom in zip(bldgs_df[str(shp_field)], bldgs_df['geometry']):
         buffer = shape(b_geom.buffer(float(buffer_distance), resolution=10))
         # ^ create a buffer polygon for the building polygons from
@@ -174,6 +214,7 @@ def spatial_indices(f_bldg_file, f_run_path, f_idx_rainfall, f_idx_config,
                 cell_index.append(cell)
                 # ^ store the line inedex of the intersecting points
     
+    # (df_b, the pairs sorted by cell, is not returned; it is useful for checking)
     df_b = pd.DataFrame(list(zip(buffer_list, cell_index)), 
                         columns=[str(shp_field),'cell']) 
     df_b = df_b.sort_values(by=['cell'])    
@@ -201,11 +242,17 @@ def read_interventions(f_txt_files):
     txt_files_lst : list of str
         Contents of each ``.txt`` file.
     """
+    # NOTE (known issue): every file in the folder except desktop.ini (a Windows
+    # system file) is counted, not only .txt files. Any other file would add a
+    # gene with no zone text (None), so keep only the zone .txt files here.
     ## count_files variable will be used later
     count_files = len([f for f in os.listdir(f_txt_files) 
                        if f != 'desktop.ini'])
     txt_files_lst = [None]*count_files
     i = 0   # will be used to initialize series of variables inside for loop
+    # Gene order = the order in which os.listdir() returns the file names. Python
+    # does not guarantee this order (on Windows/NTFS it is normally alphabetical),
+    # and intervention_cost.csv must list the zone costs in the same order.
     for file in os.listdir(f_txt_files):   # file will be a string variable
         # Check whether file is in text format or not
         if file.endswith(".txt"):
@@ -243,6 +290,8 @@ def initial_pop(f_pop_size,f_chrom_len):
        
     ## Setting one chrom equal to zero (no intervention - baseline scenerio)
     initial_p[len(initial_p)-2] = 0
+    # and one chrom equal to one (every intervention zone built), so both
+    # extremes are always evaluated
     initial_p[len(initial_p)-1] = 1
     return initial_p
 
@@ -313,6 +362,9 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
         number, shape (f_pop_size, len(f_rainfall_num)).
     """
      
+    # Output arrays have one row per chromosome; exposure and damage have one
+    # column per rainfall number (return period). f_damage_cost_m (damage in
+    # million £) is filled in but not returned.
     # cost of combined features
     f_chrom_cost = np.zeros(f_pop_size)[:,np.newaxis]
     # total number of features/shapes (combined)
@@ -329,10 +381,15 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
     # to store damage cost in millions
     f_damage_cost_m = np.zeros([f_pop_size, len(f_rainfall_num)]).astype(float)
      
+    # === For each chromosome: build GreenAreas.txt, run CityCAT for every
+    # === rainfall number, then classify buildings and calculate damage
     for pop in range(len(f_population)): 
         # ^ this loop will iterate for each of the chroms
         print("\n" "Gen.{0}: CityCAT simulating chromosome no. {1} of {2}"
               .format(str(f_generation), str(pop+1), str(len(f_population))))    
+        # Start from an empty GreenAreas.txt in the run folder; CityCAT reads the
+        # green (permeable) areas from this file. NOTE (known issue): the path is
+        # built with a Windows backslash, so this only works on Windows.
         if os.path.isfile(f_run_path + '\GreenAreas.txt'):
            os.remove(f_run_path + '\GreenAreas.txt')
            #create an empty file
@@ -341,6 +398,9 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
            ## create an empty file
            open(f_run_path + '\GreenAreas.txt', 'a').close()
             
+        # Collect the feature text of every zone switched on in this chromosome
+        # (gene = 1), and add up its number of features and its cost. Line 0 of each
+        # zone text is its number of features; lines 1 onwards are the features.
         shps_join = ""      # combined geometries
         ## loop iterates through chromosome to get features which 
         ## are present in chrom
@@ -359,6 +419,8 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
         ## validation of joined text
         # print(len(shps_join.splitlines()) == total_shps[pop])
         ## adding total shapes as text file header
+        # Final file = master green areas + selected zones. Its first line is the
+        # total number of features (the same layout as the input files).
         GA_count = int(f_GA_read.splitlines()[0])
         GA_shps = '\n'.join(f_GA_read.splitlines()[1:])
         final_count = GA_count + total_shps[pop]
@@ -372,10 +434,15 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
         
        
         """ Run CityCAT """
+        # Run CityCAT once for each rainfall number (return period), each time with
+        # this chromosome's GreenAreas.txt
         for rp in range(len(f_rainfall_num)):
             
             print("\n" "Simulating for Rainfall {0}".format(str(f_rainfall_num[rp])))
             
+            # CityCAT writes its results to R<rainfall>C<config>_SurfaceMaps/ in the run
+            # folder. That folder is deleted first, so the depths read below always
+            # come from this run.
             run_folder = 'R{r}C{c}_SurfaceMaps'.format(r = f_rainfall_num[rp], 
                                                        c = f_config_num)
             ## citycat output files path
@@ -390,6 +457,9 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
             
             start_timestamp = pd.Timestamp.now()
             #print("CityCAT run = " + str(run))
+            # Windows command: cd into the run folder, then run
+            # citycat.exe -r <rainfall number> -c <configuration number>
+            # (subprocess.call waits until CityCAT has finished)
             subprocess.call('cd {run_path} & citycat.exe -r {r} -c {c}'.format
                             (run_path = f_run_path, r = f_rainfall_num[rp],
                              c = f_config_num), shell=True)
@@ -400,6 +470,9 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
             
             """ Exposure calculation """
     
+            # Read the maximum water depth (3rd column) of every grid cell from CityCAT's
+            # max-depth CSV; Z[k] is the depth of data row k (the same numbering as
+            # cell_index from spatial_indices)
             f=open(citycat_outputs_path + '/' + citycat_output_file)    
             Z=[]
             aline = f.readline().strip()       
@@ -414,11 +487,14 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
             # below line reads the depth values from the file according to
             # cell index from above and stores the depth with the intersecting
             # building ID
+            # df: one row per (building, nearby cell) pair, holding that cell's depth
             df = pd.DataFrame(list(zip(itemgetter(*f_cell_index)(Z),
                                        f_buffer_list)), 
                               columns=['depth',str(f_shp_field)]) 
             del(Z)
     
+            # For each building: mean and 90th-percentile depth of its nearby cells,
+            # rounded to 3 decimals
             ## based on the building ID the mean and maximum depth are
             ## established and stored in a new data frame:
             mean_depth = pd.DataFrame(df.groupby([str(f_shp_field)])
@@ -439,10 +515,17 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
                                                     'geometry', 'Type']])  
             ## calculate the area for each building
             bldgs_df['area'] = (bldgs_df.area).astype(int) 
+            # Left join: every building is kept; buildings with no grid cell inside
+            # their buffer get NaN depths (treated as low exposure below)
             buildings_join = bldgs_df.merge(categ_df, on=str(f_shp_field), 
                                             how='left')
             
     
+            # Exposure classes (depths in m, from the mean and 90th-percentile depth):
+            #   Low    : mean < 0.10 and p90 < 0.30, or no depth data (NaN)
+            #   Medium : mean < 0.10 and p90 >= 0.30,
+            #            or 0.10 <= mean < 0.30 and p90 < 0.30
+            #   High   : mean >= 0.10 and p90 >= 0.30
             ## conditions for classifying the building according 
             ## to the threshold values
             low_expo_cond = ((buildings_join['mean_depth'] >= 0) & 
@@ -464,6 +547,8 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
                              (buildings_join['p90ile_depth'] >= 0.30))
             
             ## condition for selecting different types of buildings
+            # Only these four building types have depth-damage curves; buildings of any
+            # other Type keep a damage of 0
             residential = buildings_join['Type'] == 'Residential'
             retail = buildings_join['Type'] == 'Retail'
             offices = buildings_join['Type'] == 'Offices'
@@ -471,8 +556,12 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
             
             ## adding a new column in geo dataframe
             # buildings_join['class'] = 'A) Low'
+            # 'class' starts empty and 'dmg_cost' starts at 0 for every building
             buildings_join['class'] = ''
             buildings_join['dmg_cost'] = 0
+            # NOTE (known issue): dmg_cost starts as an integer column but fractional
+            # damages are written into it below; pandas 3 refuses this (TypeError), so
+            # requirements.txt pins pandas < 3.
             
             ## classifying buildings
             ## low exposure
@@ -495,6 +584,8 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
             
             ## calculating damage cost for medium and high expsoure
             ## buildings selection condition
+            # Damage is calculated only for buildings that are NOT in the Low class
+            # (i.e. Medium and High); Low buildings keep a damage of 0
             select_cond = (buildings_join['class'] != 'A) Low')
             
             ## this will select only high exposure buildings to damage cost
@@ -510,6 +601,8 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
             ## 3m and we don't want to extrapolate
             p90_depth[p90_depth > 3] = 3
             
+            # Residential: damage per building (£), linearly interpolated from the
+            # residential curve (f_res_dd: depth, damage) at the 90th-percentile depth
             buildings_join.loc[select_cond & residential, 'dmg_cost'] = (
                 np.interp(p90_depth, f_res_dd[:,0], f_res_dd[:,1])) 
                                                 
@@ -519,6 +612,9 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
             p90_depth[p90_depth > 3] = 3
             ## for non-residential buildings, we also need area
             ## see multi-colour manual for details
+            # Non-residential: damage per unit area from the matching column of
+            # f_nonres_dd (1 = retail, 2 = offices, 3 = public buildings) at the
+            # 90th-percentile depth, multiplied by the building footprint area
             b_area = (buildings_join.loc[select_cond & retail, 'area'])
             buildings_join.loc[select_cond & retail, 'dmg_cost'] = (
                 (np.interp(p90_depth, f_nonres_dd[:,0], f_nonres_dd[:,1])) * b_area)
@@ -542,6 +638,9 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
             del(categ_df)
     
             ## calculate total buildings in different exposure classes
+            # Store the results of this chromosome (row pop) and rainfall number
+            # (column rp). f_damage_cost is an integer array, so the total damage is
+            # truncated to whole pounds.
             f_expo_low[pop,rp]= (buildings_join['class'] == 'A) Low').sum()
             f_expo_medium[pop,rp] = (buildings_join['class'] == 'B) Medium').sum()        
             f_expo_high[pop,rp]= (buildings_join['class'] == 'C) High').sum()
@@ -576,6 +675,11 @@ def non_dominated_sorting(population_size,f_chroms_obj_record):
         Fronts keyed 0, 1, 2, ...; each holds the row indices of its
         solutions. Front 0 is the non-dominated (Pareto) set.
     """
+    # s[p]   = list of solutions that p dominates
+    # n[p]   = number of solutions that dominate p
+    # front  = {0: [...], 1: [...], ...}; rank[p] = front number of p
+    # p dominates q when p is no worse than q in both objectives and strictly
+    # better in at least one (both objectives are minimised)
     s,n={},{}
     front,rank={},{}
     front[0]=[]     
@@ -599,11 +703,14 @@ def non_dominated_sorting(population_size,f_chroms_obj_record):
                   (f_chroms_obj_record[p][0]>f_chroms_obj_record[q][0] and 
                    f_chroms_obj_record[p][1]>=f_chroms_obj_record[q][1])):
                 n[p]=n[p]+1
+        # Nobody dominates p, so p belongs to the first front (the Pareto front)
         if n[p]==0:
             rank[p]=0
             if p not in front[0]:
                 front[0].append(p)
     
+    # Build the next fronts: when the members of front i are removed, any
+    # solution whose domination count n[q] drops to 0 belongs to front i+1
     i=0
     while (front[i]!=[]):
         Q=[]
@@ -617,6 +724,7 @@ def non_dominated_sorting(population_size,f_chroms_obj_record):
         i=i+1
         front[i]=Q
                 
+    # The loop ends after creating an empty front; remove it
     del front[len(front)-1]
     return front
 
@@ -644,12 +752,15 @@ def calculate_crowding_distance(f_front,f_chroms_obj_record):
     dict of int to dict
         For each front, a mapping of solution index to crowding distance.
     """
+    # distance[front number] = {solution index: crowding distance}
     distance = {}
     for i in range(len(f_front)):
         distance[i] = dict.fromkeys(f_front[i], 0)
         del i
     
     for o in range(len(f_front)):
+            # dt / de: objective 0 (cost) / objective 1 (EAD) of each solution in this
+            # front; dt_dis / de_dis: the distance contributed by each objective
             dt = dict.fromkeys(f_front[o], 0)
             dt_dis = dict.fromkeys(f_front[o], 0)
             de = dict.fromkeys(f_front[o], 0)
@@ -658,6 +769,7 @@ def calculate_crowding_distance(f_front,f_chroms_obj_record):
                 dt[k] = f_chroms_obj_record[k][0]
                 de[k] = f_chroms_obj_record[k][1]
             del k
+            # Sort the front's solutions by each objective (ascending)
             dt_sort = {k: v for k, v in sorted(dt.items(), key=lambda 
                                                item: item[1])}
             de_sort = {k: v for k, v in sorted(de.items(), key=lambda 
@@ -668,6 +780,9 @@ def calculate_crowding_distance(f_front,f_chroms_obj_record):
             ## key in dt_sort and de_sort    
             ## list(dictionary.values()) returns list of dictionary values
             key_lst = list(dt_sort.keys())    
+            # Objective 0: an interior solution gets (next value - previous value) /
+            # (largest - smallest value in the front). The two end solutions get a very
+            # large value (666666666) so that they are always preferred.
             for i,key in enumerate(key_lst):
                 if i!=0 and i!= len(dt_sort)-1:
                     dt_dis[key] = ((abs(dt_sort[key_lst[i+1]]-
@@ -677,6 +792,7 @@ def calculate_crowding_distance(f_front,f_chroms_obj_record):
                 else:
                     dt_dis[key] = 666666666
             del i,key, key_lst
+            # Objective 1: the same, with 333333333 for the two end solutions
             key_lst = list(de_sort.keys())  
             for i,key in enumerate(key_lst):
                 if i!=0 and i!= len(de_sort)-1:
@@ -687,6 +803,7 @@ def calculate_crowding_distance(f_front,f_chroms_obj_record):
                 else:
                     de_dis[key] = 333333333    
             
+            # Total crowding distance = sum of the two objective distances
             t_dis = {}
             
             for i in key_lst:
@@ -714,12 +831,15 @@ def fitness_sort(f_distance, f_pop_size):
     list of int
         Solution indices from fittest to least fit.
     """
+    # Within each front, sort the solutions by crowding distance, largest first
     f_distance_sort = {}
     for i in range(len(f_distance)):
         f_distance_sort[i] = {k: v for k, v in sorted(f_distance[i].items(), 
                                                      key=lambda 
                                                      item: item[1], 
                                                      reverse = True)}
+    # Then list front 0, front 1, ... one after another: the result runs from
+    # the fittest solution to the least fit
     parents_offspring = [None]*f_pop_size
     a = 0
     for i in range(len(f_distance_sort)):
@@ -749,11 +869,14 @@ def fitter_parent(f_sorted_fitness,f_pop_size):
     int
         Index of the selected parent.
     """
+    # Draw two different random solution indices (0 to f_pop_size-1)
     pairs_rand = np.random.randint(f_pop_size, size = (1, 2))
     
     while pairs_rand[0,0] == pairs_rand[0,1]:
         pairs_rand = np.random.randint(f_pop_size, size = (1, 2))
     
+    # np.where gives each solution's position in the fitness ranking; the one
+    # with the smaller position (the fitter one) wins the tournament
     if (np.where(f_sorted_fitness == pairs_rand[0,0]) < 
           np.where(f_sorted_fitness == pairs_rand[0,1])):
         return pairs_rand[0,0]
@@ -787,14 +910,18 @@ def crossover_random_single_point_swap(f_pop, p1, p2, f_min_idx, f_max_idx):
     ## creating childrens
     ## random crossover index position for first child
     c_index = np.random.randint(f_min_idx,f_max_idx)
+    # Child 1 = genes [0, c_index) of parent 1 + genes [c_index, end) of parent 2
     f_child_1 = np.concatenate((f_pop[p1][0:c_index], 
                         f_pop[p2][c_index:len(f_pop[p1])]), axis=0)
     
     ## random crossover index position for second child
     c_index = np.random.randint(f_min_idx,f_max_idx)
+    # Child 2 = genes [0, c_index) of parent 2 + genes [c_index, end) of parent 1
+    # (with its own random cut point)
     f_child_2 = np.concatenate((f_pop[p2][0:c_index], 
                         f_pop[p1][c_index:len(f_pop[p1])]), axis=0)
     
+    # (.transpose() leaves a 1-D array unchanged)
     return f_child_1.transpose(), f_child_2.transpose() 
 
 #-----------------------------------------------------------------------------#
@@ -825,6 +952,8 @@ def mutation_random_bitflip(f_child_1, f_child_2, f_chrom_len, prob,
     f_child_1, f_child_2 : numpy.ndarray
         The mutated children.
     """
+    # The children are changed in place. With probability prob, one random gene
+    # of a child is flipped (0 -> 1 or 1 -> 0).
     ## Mutation of 1st child
     if prob > np.random.rand():
         m_index = np.random.randint(f_m_idx_range)
@@ -842,6 +971,8 @@ def mutation_random_bitflip(f_child_1, f_child_2, f_chrom_len, prob,
             f_child_2[m_index] = 0
     
     ## Check if both children are the same
+    # Identical children would waste a simulation, so keep flipping random genes
+    # of the second child until the two differ
     while np.all(f_child_1 == f_child_2) == True:
         m_index = np.random.randint(f_m_idx_range)
         if f_child_2[m_index] == 0:
@@ -871,6 +1002,9 @@ def remove_duplicate_list(record_list):
     # print('\n' 'Checking duplicates in the list:')
     m_pool = copy.deepcopy(record_list)
     idx = {}
+    # Compare every pair of rows (i < j). When row j repeats row i, remember j,
+    # so that the first occurrence is kept and the later copies are deleted.
+    # A dict is used so that each row number is stored only once.
     for i in range(0,len(m_pool)):
         for j in range(i+1,len(m_pool)):
             if np.all((m_pool[i] == m_pool[j]) == True):
@@ -905,6 +1039,7 @@ def remove_duplicate_same_population(same_population):
     # print('\nChecking duplicate chroms in the same population:')
     pop_uniq = copy.deepcopy(same_population)
     a = {}
+    # Same pairwise comparison as remove_duplicate_list: later copies are removed
     for i in range(0, len(pop_uniq)):
         for j in range(i+1,len(pop_uniq)):
             if np.all((pop_uniq[i] == pop_uniq[j]) == True):
@@ -937,6 +1072,8 @@ def remove_duplicate_different_population(population1, population2):
     """
     pop_1 = copy.deepcopy(population1)
     a = {}
+    # Mark every chromosome of population1 (index j) that equals any chromosome
+    # of population2, then delete all marked rows at once
     for i in range(0,len(population2)):
         for j in range(0,len(population1)):
             if np.all((population2[i] == population1[j]) == True):
@@ -994,6 +1131,8 @@ def zone_contribution(f_shape_zones, f_join_column, f_chrom_len,
     # shape_zone_id = np.array(f_shape_zones['cluster_id'])
     
     # joining fields from dataframe to shapefile (gpd)
+    # Gene i is zone i+1 in the map (f_join_column, e.g. 'cluster_id'); zones
+    # without a matching row get NaN
     joined_shape_zones = pd.merge(
         left=f_shape_zones,
         right=df,
@@ -1055,6 +1194,8 @@ def scatter_plot_map_plot(f_fig_background, f_plot_title, f_cost, f_exposure,
     
     plt.style.use(f_fig_background)
     
+    # One figure with two panels: ax[0] = cost vs risk scatter plot,
+    # ax[1] = map of how often each zone is selected (%)
     fig, ax = plt.subplots(1, 2, figsize =(22, 8), dpi = 300,
                            gridspec_kw={'width_ratios': [0.9, 1]})
     ax = ax.flatten()
@@ -1112,6 +1253,8 @@ def scatter_plot_map_plot(f_fig_background, f_plot_title, f_cost, f_exposure,
     cax = divider.append_axes("right", size="2%", pad=0.1)
     cax.tick_params(labelsize='12')
     
+    # Zones with 0 % contribution are set to NaN so that they are drawn in white
+    # (missing_kwds); the others use a 10-class colour map from 0 to 100 %
     f_shape_zones_joined = copy.deepcopy(f_shape_zones_joined)
     f_shape_zones_joined[f_shape_zones_contribution_column] = (
     f_shape_zones_joined[f_shape_zones_contribution_column].replace(
@@ -1133,6 +1276,9 @@ def scatter_plot_map_plot(f_fig_background, f_plot_title, f_cost, f_exposure,
                 #               "hatch": "///"})
         
                 
+    # USER INPUT (other case studies): the "No contribution" legend box below and
+    # the map's y-axis limits (plt.ylim) use fixed map coordinates of the
+    # published case study; change them for another area.
     if f_shape_zones_joined[f_shape_zones_contribution_column].isna().sum()!=0:
         ax[1].text(0.1, 0.03, 'No contribution ',
                     horizontalalignment='left', verticalalignment='bottom',
@@ -1161,6 +1307,8 @@ def scatter_plot_map_plot(f_fig_background, f_plot_title, f_cost, f_exposure,
         
     # plt.show()            
     # Save figure to desktop
+    # Saved in the working directory (the run folder); Matplotlib adds .png when
+    # the file name has no extension
     plt.savefig(f_save_file, dpi='figure', transparent = False, 
                 bbox_inches = 'tight', pad_inches = 0.25)
     plt.close()
@@ -1193,6 +1341,8 @@ def separate_new_old(f_new_population, f_old_population):
     ## ^ for new and old we used f_new_population. For new_chroms, we
     ## will delete old chroms from new population. For old_chroms, we
     ## will select old chroms from new population
+    # a holds the positions (in the new population) of chromosomes that were
+    # already in the old population
     a = {}
     for i in range(0,len(f_old_population)):
         for j in range(0,len(f_new_population)):
@@ -1201,6 +1351,9 @@ def separate_new_old(f_new_population, f_old_population):
                 #       'equal to chromosome no. {0} in old population'
                 #       .format(j))
                 a[j] = j
+    # NOTE (known issue): if no chromosome of the old population survives
+    # (a == {}), f_old_chroms_index is never set and the return line below
+    # raises UnboundLocalError.
     if a!={}:
         f_new_chroms = np.delete(f_new_chroms, list(a.values()),0)
         f_old_chroms = f_old_chroms[list(a.values())]
@@ -1231,6 +1384,7 @@ def remove_same_objectives_population(f_comb_population, f_dup_idx_obj):
     comb_pop = copy.deepcopy(f_comb_population)
     a = copy.deepcopy(f_dup_idx_obj)
 
+    # np.delete removes all the listed rows in one call
     if a!=[]:
         comb_pop = np.delete(comb_pop, a, 0)
     return comb_pop
