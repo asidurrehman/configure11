@@ -30,22 +30,37 @@ import geopandas as gpd
 import sys
 import warnings
 import copy
-import importlib.util
+import argparse
+from pathlib import Path
+
+import yaml
 
 warnings.filterwarnings("ignore")
 
 #-----------------------------------------------------------------------------#
+# Reading settings from config.yaml
+#-----------------------------------------------------------------------------#
+## folder containing this script (and configure11_functions.py)
+SCRIPT_DIR = Path(__file__).resolve().parent
+parser = argparse.ArgumentParser(
+    description="Run CONFIGURE v1.1 (NSGA-II coupled with CityCAT).")
+parser.add_argument("--config", default=str(SCRIPT_DIR / "config.yaml"),
+                    help="Path to the YAML configuration file "
+                         "(default: config.yaml next to this script)")
+## parse_known_args keeps the script working when run from Spyder/IPython
+args, _ = parser.parse_known_args()
+with open(args.config, "r", encoding="utf-8") as config_file:
+    config = yaml.safe_load(config_file)
+
+## Load CONFIGURE functions from the same folder as this script
+sys.path.insert(0, str(SCRIPT_DIR))
+import configure11_functions as cf
+
+#-----------------------------------------------------------------------------#
 # Creating/setting folders and paths
 #-----------------------------------------------------------------------------#
-# ## citycat run path
-run_path = os.path.join('C:', os.path.sep, 'z', 'configure11')
-
-configure_func_path = os.path.join(run_path, 'codes',
-                                   'configure11_functions.py')
-# Load configure_func
-spec1 = importlib.util.spec_from_file_location("configure_func", configure_func_path)
-cf = importlib.util.module_from_spec(spec1)
-spec1.loader.exec_module(cf)
+# ## citycat run path (set in config.yaml)
+run_path = os.path.normpath(config["run_path"])
 
 
 ## to change working directory
@@ -53,9 +68,9 @@ os.chdir(run_path)
 ## show working directory
 print("Current working directory: {0}".format(os.getcwd()))
 ## CityCAT rainfall file number
-rainfall_num = np.array([1030, 2030, 3030, 5030, 10030])
+rainfall_num = np.array(config["rainfall_num"])
 ## CityCAT configuration file number
-config_num = 2
+config_num = config["config_num"]
 
 ## buildings shapefile
 bldg_file = os.path.join(run_path, 'vector', 'buildings.shp')
@@ -66,7 +81,7 @@ txt_files = os.path.join(run_path, 'permeable_zones')
 
 ## CSV file for indexing
 idx_rainfall = rainfall_num[0]
-idx_config = 1
+idx_config = config["idx_config"]
 idx_folder = 'R{r}C{c}_SurfaceMaps'.format(r = idx_rainfall, c = idx_config)
 idx_file = 'R{r}_C{c}_max_depth.csv'.format(r = idx_rainfall, c = idx_config)
 csv_file = os.path.join(run_path, idx_folder,idx_file)
@@ -110,7 +125,7 @@ perm_cost = np.array(df_int_cost)[:,1]
 
 ## Creating individuals (chromosomes) from features
 chrom_len = count     # chromosome length
-pop_size = 100        # population size (number of chromosomes)
+pop_size = config["pop_size"]  # population size (number of chromosomes)
 
 
 ## Generating initial random population 
@@ -267,7 +282,8 @@ p_chrom_damage = copy.deepcopy(i_chrom_damage)
 """ Generation loop starts from here"""
 #-------------------------------------#
 generation = 1
-for generation in range(1,101):
+num_generations = config["num_generations"]  # set in config.yaml
+for generation in range(1,num_generations+1):
 
     print('\n''Gen.{0}: Generating offspring population'.format(generation))
     ## Making pair of objectives
