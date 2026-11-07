@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# CONFIGURE v1.1 settings
+#
+# configure11_main.py reads this file. To use a different file, run:
+#   python configure11_main.py --config path/to/my_config.yaml
+# The values below reproduce the set-up used for the published article.
+# ---------------------------------------------------------------------------
+
+# Folder that holds citycat.exe, the CityCAT inputs and the data folders
+# described in the README. All outputs are also written here.
+# Use forward slashes, even on Windows.
+run_path: C:/z/configure11
+
+# CityCAT rainfall numbers (passed to citycat.exe as -r). There must be five,
+# in this order: the 10-, 20-, 30-, 50- and 100-year return-period storms.
+# The Expected Annual Damage (EAD) calculation and the DD_* column names in
+# the output CSV files assume exactly this order.
+rainfall_num: [1030, 2030, 3030, 5030, 10030]
+
+# CityCAT configuration number used for every optimisation run (-c).
+config_num: 2
+
+# CityCAT configuration number for the one-off start-up run (with the first
+# rainfall number) that builds the spatial index of grid cells around buildings.
+idx_config: 1
+
+# Number of candidate solutions (chromosomes) in each generation.
+pop_size: 100
+
+# Number of NSGA-II generations to run.
+num_generations: 100

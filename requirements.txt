@@ -1,0 +1,13 @@
+# Python packages needed to run CONFIGURE v1.1
+# Install with:  pip install -r requirements.txt
+# CityCAT itself is not a Python package and must be obtained separately.
+numpy>=1.23
+# pandas 3 refuses to put fractional damage costs into an integer column,
+# which the damage calculation relies on, so stay on pandas 1.5-2.x.
+pandas>=1.5,<3
+geopandas>=0.12
+# shapely 3 may drop the 'resolution' buffer argument used by the code
+shapely>=2.0,<3
+rtree>=1.0
+matplotlib>=3.6
+pyyaml>=6.0

@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the article below."
+type: software
+title: "CONFIGURE v1.1: Cost-benefit OptimisatioN Framework for Implementing blue-Green infrastructURE"
+abstract: >-
+  Python code that couples the NSGA-II multi-objective genetic algorithm with
+  the CityCAT hydrodynamic flood model to optimise the location and combined
+  size of Blue-Green Infrastructure, using direct damage cost and Expected
+  Annual Damage over five rainstorm return periods.
+version: 1.1.0
+authors:
+  - family-names: Ur Rehman
+    given-names: Asid
+    affiliation: Newcastle University
+license: GPL-3.0-only
+repository-code: "https://github.com/asidurrehman/Configure11"
+keywords:
+  - NSGA-II
+  - multi-objective optimisation
+  - blue-green infrastructure
+  - flood risk management
+  - expected annual damage
+  - CityCAT
+preferred-citation:
+  type: article
+  title: "Robust Blue-Green Urban Flood Risk Management Optimised With a Genetic Algorithm for Multiple Rainstorm Return Periods"
+  authors:
+    - family-names: Ur Rehman
+      given-names: Asid
+    - family-names: Glenis
+      given-names: Vassilis
+    - family-names: Lewis
+      given-names: Elizabeth
+    - family-names: Kilsby
+      given-names: Chris
+    - family-names: Walsh
+      given-names: Claire
+  journal: "Journal of Flood Risk Management"
+  volume: 18
+  issue: 3
+  start: "e70118"
+  year: 2025
+  doi: "10.1111/jfr3.70118"
