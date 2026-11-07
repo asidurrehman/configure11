@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "configure11"
+version = "1.1.0"
+description = "CONFIGURE v1.1: NSGA-II optimisation of Blue-Green Infrastructure with the CityCAT flood model for multiple rainstorm return periods"
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "Asid Ur Rehman" }]
+requires-python = ">=3.10"
+keywords = ["NSGA-II", "multi-objective optimisation", "blue-green infrastructure", "flood risk", "CityCAT"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Hydrology",
+]
+# Keep in step with requirements.txt
+dependencies = [
+    "numpy>=1.23",
+    "pandas>=1.5,<3",
+    "geopandas>=0.12",
+    "shapely>=2.0,<3",
+    "rtree>=1.0",
+    "matplotlib>=3.6",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.urls]
+Repository = "https://github.com/asidurrehman/Configure11"
+Article = "https://doi.org/10.1111/jfr3.70118"
+
+[tool.setuptools]
+# configure11_main.py is a script (run it directly); only the helper module is installed.
+py-modules = ["configure11_functions"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff.lint]
+# Only syntax errors and undefined names, so the original code style is left as it is.
+select = ["E9", "F63", "F7", "F82"]

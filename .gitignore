@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editors and IDEs (Spyder, PyCharm, VS Code, Jupyter)
+.spyproject/
+.idea/
+.vscode/
+.ipynb_checkpoints/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# CONFIGURE outputs, in case run_path is set to this folder
+/Generation_No_*.png
+/simulated_data.csv
+/generation_data.csv
+/optimised_data.csv
+/BGI_contribution_to_optimised_solutions.csv
+/GreenAreas.txt
+/R*C*_SurfaceMaps/
