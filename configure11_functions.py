@@ -50,6 +50,18 @@ warnings.filterwarnings("ignore")
 #  Read text file function
 #-----------------------------------------------------------------------------#
 def read_text_file(file_path):
+    """Read a whole text file and return its contents.
+
+    Parameters
+    ----------
+    file_path : str
+        Path to the text file.
+
+    Returns
+    -------
+    str
+        The file contents.
+    """
     with open(file_path, 'r') as f:
         return f.read()
     
@@ -58,6 +70,38 @@ def read_text_file(file_path):
 #-----------------------------------------------------------------------------#
 def spatial_indices(f_bldg_file, f_run_path, f_idx_rainfall, f_idx_config,
                     f_csv_file):
+    """Run CityCAT once and link grid cells to the buildings around them.
+
+    CityCAT is run with rainfall number ``f_idx_rainfall`` and configuration
+    number ``f_idx_config``. The cell-centre coordinates in the resulting
+    maximum-depth CSV (``f_csv_file``) are put in an R-tree index, and each
+    building is buffered by 150 % of the grid resolution to find the cells
+    around it. This is done once; the result is reused by
+    :func:`citycat_exposure` for every simulation.
+
+    Parameters
+    ----------
+    f_bldg_file : str
+        Buildings shapefile. Must contain a ``UID`` field.
+    f_run_path : str
+        CityCAT run folder (where ``citycat.exe`` is).
+    f_idx_rainfall : int
+        CityCAT rainfall number for the indexing run.
+    f_idx_config : int
+        CityCAT configuration number for the indexing run.
+    f_csv_file : str
+        Maximum-depth CSV written by that run (columns: x, y, depth).
+
+    Returns
+    -------
+    shp_field : str
+        Name of the building ID field (``"UID"``).
+    cell_index : list of int
+        Data-row number (in the depth CSV) of each cell that touches a
+        building buffer.
+    buffer_list : list
+        Building ID for each entry of ``cell_index``.
+    """
     subprocess.call('cd {run_path} & citycat.exe -r {r} -c {c}'.format
                     (run_path = f_run_path, r = f_idx_rainfall, 
                      c = f_idx_config), shell=True)
@@ -140,6 +184,23 @@ def spatial_indices(f_bldg_file, f_run_path, f_idx_rainfall, f_idx_config,
 # Import/read intervention text files (multiple)
 #-----------------------------------------------------------------------------#
 def read_interventions(f_txt_files):
+    """Read every intervention (permeable zone) text file in a folder.
+
+    Parameters
+    ----------
+    f_txt_files : str
+        Folder holding one CityCAT green-area text file per intervention
+        zone. Files are read in ``os.listdir`` order, which sets the gene
+        order of the chromosomes.
+
+    Returns
+    -------
+    count_files : int
+        Number of files in the folder, ignoring ``desktop.ini``. This is the
+        chromosome length.
+    txt_files_lst : list of str
+        Contents of each ``.txt`` file.
+    """
     ## count_files variable will be used later
     count_files = len([f for f in os.listdir(f_txt_files) 
                        if f != 'desktop.ini'])
@@ -160,6 +221,23 @@ def read_interventions(f_txt_files):
 #-----------------------------------------------------------------------------#
 # def initial_pop(f_pop_size,f_chrom_len, f_cost_sort_lst):
 def initial_pop(f_pop_size,f_chrom_len):
+    """Create a random binary starting population.
+
+    The second-last chromosome is set to all zeros (no intervention, the
+    baseline) and the last one to all ones (every intervention).
+
+    Parameters
+    ----------
+    f_pop_size : int
+        Number of chromosomes.
+    f_chrom_len : int
+        Number of genes (intervention zones) per chromosome.
+
+    Returns
+    -------
+    numpy.ndarray
+        Integer array of shape (f_pop_size, f_chrom_len) holding 0s and 1s.
+    """
     ## Generating random population
     initial_p = np.random.randint(2, size = (f_pop_size, f_chrom_len))
        
@@ -176,6 +254,64 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
                      f_perm_features, f_perm_cost, f_GA_read,
                      f_shp_field, f_cell_index, f_buffer_list, f_generation,
                      f_res_dd, f_nonres_dd):
+    """Simulate each chromosome with CityCAT; return cost, exposure and damage.
+
+    For every chromosome, the selected intervention zones are added to the
+    master green areas and written to ``GreenAreas.txt`` in the run folder,
+    then CityCAT is run once per rainfall number. Each building is
+    classed as low, medium or high exposure from the mean and
+    90th-percentile water depth of the cells around it. Direct damage is
+    calculated for medium and high exposure buildings from the
+    90th-percentile depth (capped at 3 m) using the depth-damage curves;
+    non-residential damage is multiplied by the building footprint area.
+
+    Parameters
+    ----------
+    f_bldg_file : str
+        Buildings shapefile with ``UID`` and ``Type`` fields. Damage is
+        calculated for ``Type`` values ``Residential``, ``Retail``,
+        ``Offices`` and ``Public Buildings``.
+    f_chrom_len : int
+        Chromosome length (number of intervention zones).
+    f_pop_size : int
+        Number of chromosomes in ``f_population``.
+    f_run_path : str
+        CityCAT run folder.
+    f_rainfall_num : numpy.ndarray
+        CityCAT rainfall numbers to simulate.
+    f_config_num : int
+        CityCAT configuration number.
+    f_population : numpy.ndarray
+        Binary population, shape (f_pop_size, f_chrom_len).
+    f_perm_features : list of str
+        Intervention zone text from :func:`read_interventions`. The first
+        line of each is its number of features.
+    f_perm_cost : numpy.ndarray
+        Cost of each intervention zone.
+    f_GA_read : str
+        Contents of the master ``GreenAreas.txt``.
+    f_shp_field, f_cell_index, f_buffer_list
+        Outputs of :func:`spatial_indices`.
+    f_generation : int
+        Generation number (used only in progress messages).
+    f_res_dd : numpy.ndarray
+        Residential depth-damage curve: column 0 depth (m), column 1
+        damage (GBP).
+    f_nonres_dd : numpy.ndarray
+        Non-residential depth-damage curves: column 0 depth (m), then
+        damage per unit area (GBP) for retail, offices and public buildings.
+
+    Returns
+    -------
+    f_chrom_cost : numpy.ndarray
+        Intervention cost of each chromosome, shape (f_pop_size, 1).
+    f_expo_high, f_expo_medium, f_expo_low : numpy.ndarray
+        Number of buildings in each exposure class, shape
+        (f_pop_size, len(f_rainfall_num)).
+    f_damage_cost : numpy.ndarray
+        Total direct damage (GBP, integer) for each chromosome and rainfall
+        number, shape (f_pop_size, len(f_rainfall_num)).
+    """
      
     # cost of combined features
     f_chrom_cost = np.zeros(f_pop_size)[:,np.newaxis]
@@ -422,6 +558,24 @@ def citycat_exposure(f_bldg_file, f_chrom_len, f_pop_size, f_run_path,
 # Non-dominated sorting function
 #-----------------------------------------------------------------------------#
 def non_dominated_sorting(population_size,f_chroms_obj_record):
+    """Rank solutions into Pareto fronts (NSGA-II non-dominated sorting).
+
+    Both objectives are minimised.
+
+    Parameters
+    ----------
+    population_size : int
+        Number of solutions to rank.
+    f_chroms_obj_record : array_like
+        Objective values, one row per solution and one column per objective
+        (two objectives).
+
+    Returns
+    -------
+    dict of int to list of int
+        Fronts keyed 0, 1, 2, ...; each holds the row indices of its
+        solutions. Front 0 is the non-dominated (Pareto) set.
+    """
     s,n={},{}
     front,rank={},{}
     front[0]=[]     
@@ -470,6 +624,26 @@ def non_dominated_sorting(population_size,f_chroms_obj_record):
 # calculate crowding distance function
 #-----------------------------------------------------------------------------#
 def calculate_crowding_distance(f_front,f_chroms_obj_record):
+    """Crowding distance of every solution within its front.
+
+    For each objective, a solution's distance is the gap between its two
+    neighbours divided by the objective's range in that front. The two
+    boundary solutions get large fixed values (666666666 for the first
+    objective, 333333333 for the second) so they are always kept. The two
+    objective distances are added together.
+
+    Parameters
+    ----------
+    f_front : dict of int to list of int
+        Fronts from :func:`non_dominated_sorting`.
+    f_chroms_obj_record : array_like
+        Objective values, one row per solution (two objectives).
+
+    Returns
+    -------
+    dict of int to dict
+        For each front, a mapping of solution index to crowding distance.
+    """
     distance = {}
     for i in range(len(f_front)):
         distance[i] = dict.fromkeys(f_front[i], 0)
@@ -526,6 +700,20 @@ def calculate_crowding_distance(f_front,f_chroms_obj_record):
 # Sorting population based on their rank and crowding distance
 #-----------------------------------------------------------------------------#
 def fitness_sort(f_distance, f_pop_size):
+    """Order solutions by front, then by decreasing crowding distance.
+
+    Parameters
+    ----------
+    f_distance : dict
+        Crowding distances from :func:`calculate_crowding_distance`.
+    f_pop_size : int
+        Total number of solutions across all fronts.
+
+    Returns
+    -------
+    list of int
+        Solution indices from fittest to least fit.
+    """
     f_distance_sort = {}
     for i in range(len(f_distance)):
         f_distance_sort[i] = {k: v for k, v in sorted(f_distance[i].items(), 
@@ -544,6 +732,23 @@ def fitness_sort(f_distance, f_pop_size):
 # Parents selection using Binary Tournament
 #-----------------------------------------------------------------------------#
 def fitter_parent(f_sorted_fitness,f_pop_size):
+    """Select a parent by binary tournament.
+
+    Two different solutions are drawn at random and the fitter one (the one
+    earlier in ``f_sorted_fitness``) is returned.
+
+    Parameters
+    ----------
+    f_sorted_fitness : numpy.ndarray
+        Solution indices from fittest to least fit (see :func:`fitness_sort`).
+    f_pop_size : int
+        Population size.
+
+    Returns
+    -------
+    int
+        Index of the selected parent.
+    """
     pairs_rand = np.random.randint(f_pop_size, size = (1, 2))
     
     while pairs_rand[0,0] == pairs_rand[0,1]:
@@ -559,6 +764,26 @@ def fitter_parent(f_sorted_fitness,f_pop_size):
 # Random one point corssover
 #-----------------------------------------------------------------------------#
 def crossover_random_single_point_swap(f_pop, p1, p2, f_min_idx, f_max_idx):
+    """Single-point crossover that produces two children.
+
+    Each child gets its own random cut point in ``[f_min_idx, f_max_idx)``.
+    Child 1 takes the genes before the cut from parent 1 and the rest from
+    parent 2; child 2 does the opposite.
+
+    Parameters
+    ----------
+    f_pop : numpy.ndarray
+        Population, one chromosome per row.
+    p1, p2 : int
+        Row indices of the two parents.
+    f_min_idx, f_max_idx : int
+        Lower (inclusive) and upper (exclusive) bounds of the cut point.
+
+    Returns
+    -------
+    f_child_1, f_child_2 : numpy.ndarray
+        The two children.
+    """
     ## creating childrens
     ## random crossover index position for first child
     c_index = np.random.randint(f_min_idx,f_max_idx)
@@ -577,6 +802,29 @@ def crossover_random_single_point_swap(f_pop, p1, p2, f_min_idx, f_max_idx):
 #-----------------------------------------------------------------------------#
 def mutation_random_bitflip(f_child_1, f_child_2, f_chrom_len, prob,
                             f_m_idx_range):
+    """Random bit-flip mutation of two children.
+
+    With probability ``prob``, one randomly chosen gene of each child is
+    flipped. If the two children are then identical, random genes of the
+    second child are flipped until they differ. The input arrays are
+    changed in place.
+
+    Parameters
+    ----------
+    f_child_1, f_child_2 : numpy.ndarray
+        The children to mutate.
+    f_chrom_len : int
+        Chromosome length (not used inside the function).
+    prob : float
+        Mutation probability for each child.
+    f_m_idx_range : int
+        Genes are chosen from ``range(f_m_idx_range)``.
+
+    Returns
+    -------
+    f_child_1, f_child_2 : numpy.ndarray
+        The mutated children.
+    """
     ## Mutation of 1st child
     if prob > np.random.rand():
         m_index = np.random.randint(f_m_idx_range)
@@ -606,6 +854,20 @@ def mutation_random_bitflip(f_child_1, f_child_2, f_chrom_len, prob,
 # Remove duplicate from a list
 #-----------------------------------------------------------------------------#
 def remove_duplicate_list(record_list):
+    """Remove repeated rows, keeping the first occurrence.
+
+    Parameters
+    ----------
+    record_list : numpy.ndarray
+        2-D array, e.g. objective values with one row per solution.
+
+    Returns
+    -------
+    m_pool : numpy.ndarray
+        The array without repeated rows.
+    list of int
+        Row indices (in ``record_list``) that were removed.
+    """
     # print('\n' 'Checking duplicates in the list:')
     m_pool = copy.deepcopy(record_list)
     idx = {}
@@ -626,6 +888,20 @@ def remove_duplicate_list(record_list):
 # Removing duplicates from offspring
 #-----------------------------------------------------------------------------#
 def remove_duplicate_same_population(same_population):
+    """Remove duplicate chromosomes, keeping the first occurrence.
+
+    Parameters
+    ----------
+    same_population : numpy.ndarray
+        Population, one chromosome per row.
+
+    Returns
+    -------
+    pop_uniq : numpy.ndarray
+        The population without duplicates.
+    list of int
+        Row indices that were removed.
+    """
     # print('\nChecking duplicate chroms in the same population:')
     pop_uniq = copy.deepcopy(same_population)
     a = {}
@@ -643,6 +919,22 @@ def remove_duplicate_same_population(same_population):
 # Removing offspring which are duplicates of parents
 #-----------------------------------------------------------------------------#
 def remove_duplicate_different_population(population1, population2):
+    """Remove chromosomes of ``population1`` that also appear in ``population2``.
+
+    Used to drop new offspring that have already been simulated.
+
+    Parameters
+    ----------
+    population1 : numpy.ndarray
+        Candidate chromosomes, e.g. new offspring.
+    population2 : numpy.ndarray
+        Reference chromosomes, e.g. all chromosomes simulated so far.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``population1`` without the chromosomes found in ``population2``.
+    """
     pop_1 = copy.deepcopy(population1)
     a = {}
     for i in range(0,len(population2)):
@@ -660,6 +952,30 @@ def remove_duplicate_different_population(population1, population2):
 #-----------------------------------------------------------------------------#
 def zone_contribution(f_shape_zones, f_join_column, f_chrom_len,
                       f_population, f_pop_size):    
+    """Share of solutions that select each zone, joined to the zones map.
+
+    Parameters
+    ----------
+    f_shape_zones : geopandas.GeoDataFrame
+        Intervention zone polygons.
+    f_join_column : str
+        Zone ID column in ``f_shape_zones``. Gene ``i`` of a chromosome is
+        matched to zone ID ``i + 1``.
+    f_chrom_len : int
+        Chromosome length.
+    f_population : numpy.ndarray
+        Population, one chromosome per row.
+    f_pop_size : int
+        Number of chromosomes (used for the percentage).
+
+    Returns
+    -------
+    joined_shape_zones : geopandas.GeoDataFrame
+        ``f_shape_zones`` with ``zone_id``, ``count`` and ``per_count``
+        (whole-number percentage) columns added.
+    str
+        Name of the percentage column (``"per_count"``).
+    """
     # calculating total contribution of each zone (chromosome)
     chrom_contribution = np.zeros((f_chrom_len, 3), dtype=int)
     for i in range(f_chrom_len):
@@ -698,6 +1014,44 @@ def scatter_plot_map_plot(f_fig_background, f_plot_title, f_cost, f_exposure,
          f_plot_x_axis_label, f_plot_y_axis_label, f_map_title, f_map_colour,
          f_map_legend_ticks, f_map_legend_label, f_shape_zones_joined,
          f_shape_zones_contribution_column, f_save_file):
+    """Save a cost-risk scatter plot and a zone contribution map in one figure.
+
+    The map's vertical extent (563000 to 567000) and the position of the
+    "No contribution" legend box are fixed for the published case study.
+
+    Parameters
+    ----------
+    f_fig_background : str
+        Matplotlib style name, e.g. ``"default"``.
+    f_plot_title : str
+        Scatter plot title.
+    f_cost, f_exposure : array_like
+        x values (cost) and y values (risk, e.g. EAD) of the solutions.
+    f_plot_legend_series : str
+        Legend label for the points.
+    f_plot_x_limit, f_plot_y_limit : sequence of two floats
+        Axis limits of the scatter plot.
+    f_plot_x_axis_label, f_plot_y_axis_label : str
+        Axis labels of the scatter plot.
+    f_map_title : str
+        Map title.
+    f_map_colour : str
+        Matplotlib colour map name (shown in 10 classes).
+    f_map_legend_ticks : array_like
+        Colour bar ticks (%).
+    f_map_legend_label : str
+        Colour bar label.
+    f_shape_zones_joined : geopandas.GeoDataFrame
+        Output of :func:`zone_contribution`.
+    f_shape_zones_contribution_column : str
+        Column to map. Zones with 0 % are drawn in white.
+    f_save_file : str
+        Output file name. Matplotlib adds ``.png`` when there is no extension.
+
+    Returns
+    -------
+    None
+    """
     
     plt.style.use(f_fig_background)
     
@@ -815,6 +1169,24 @@ def scatter_plot_map_plot(f_fig_background, f_plot_title, f_cost, f_exposure,
 # Takes new population and separates new & old individuals
 #-----------------------------------------------------------------------------#
 def separate_new_old(f_new_population, f_old_population):
+    """Split a population into new chromosomes and ones carried over.
+
+    Parameters
+    ----------
+    f_new_population : numpy.ndarray
+        Population of the current generation.
+    f_old_population : numpy.ndarray
+        Population of the previous generation.
+
+    Returns
+    -------
+    f_new_chroms : numpy.ndarray
+        Chromosomes not in ``f_old_population``.
+    f_old_chroms : numpy.ndarray
+        Chromosomes also in ``f_old_population``.
+    f_old_chroms_index : list of int
+        Row indices of ``f_old_chroms`` in ``f_new_population``.
+    """
     # print('\n' 'Checking new and old chroms in new population')
     f_new_chroms = copy.deepcopy(f_new_population)
     f_old_chroms = copy.deepcopy(f_new_population)
@@ -839,6 +1211,23 @@ def separate_new_old(f_new_population, f_old_population):
 # Deletes those chromosomes which have same objective functions
 #-----------------------------------------------------------------------------#
 def remove_same_objectives_population(f_comb_population, f_dup_idx_obj):
+    """Remove chromosomes at the given row indices.
+
+    Used to drop chromosomes whose objective values repeat another's
+    (indices from :func:`remove_duplicate_list`).
+
+    Parameters
+    ----------
+    f_comb_population : numpy.ndarray
+        Combined parent and offspring population.
+    f_dup_idx_obj : list of int
+        Row indices to remove.
+
+    Returns
+    -------
+    numpy.ndarray
+        The population without those rows.
+    """
     comb_pop = copy.deepcopy(f_comb_population)
     a = copy.deepcopy(f_dup_idx_obj)
 
